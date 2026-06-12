@@ -109,7 +109,6 @@
 			data-role = "dual";
 
 #ifdef ENABLE_DCPEXT_TYPEC
-			/* hacks */
 			displayport = <&dcpext>;
 #endif
 
@@ -153,8 +152,6 @@
 &dcpext {
 	status = "okay";
 	apple,connector-type = "DP";
-
-	/* hacks */
 	apple,dptx-phy = <1>;
 	phys = <&atcphy1 PHY_TYPE_DP>;
 	phy-names = "dp-phy";

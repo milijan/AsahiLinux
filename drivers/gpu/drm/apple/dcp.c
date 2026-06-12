@@ -514,6 +514,9 @@ int dcp_start(struct platform_device *pdev)
 	struct apple_dcp *dcp = platform_get_drvdata(pdev);
 	int ret;
 
+	if (dcp->rtk_boot_failed)
+		return -ENODEV;
+
 	init_completion(&dcp->start_done);
 
 	/* start RTKit endpoints */
@@ -620,7 +623,7 @@ int dcp_wait_ready(struct platform_device *pdev, u64 timeout)
 	struct apple_dcp *dcp = platform_get_drvdata(pdev);
 	int ret;
 
-	if (dcp->crashed)
+	if (dcp->crashed || dcp->rtk_boot_failed)
 		return -ENODEV;
 	if (dcp->active)
 		return dcp_enable_dp2hdmi_hpd(dcp);
@@ -1088,9 +1091,17 @@ static int dcp_comp_bind(struct device *dev, struct device *main, void *data)
 				     "Failed to initialize RTKit\n");
 
 	ret = apple_rtkit_wake(dcp->rtk);
-	if (ret)
+	if (ret) {
+		/* non-fatal: keep the internal display working */
+		if (dcp->phy) {
+			dev_warn(dev,
+				 "dcpext RTKit boot failed (%d): external display unavailable.\n", ret);
+			dcp->rtk_boot_failed = true;
+			return 0;
+		}
 		return dev_err_probe(dev, ret,
 				     "Failed to boot RTKit: %d\n", ret);
+	}
 	return ret;
 }
 
@@ -1248,26 +1259,6 @@ static int dcp_platform_probe(struct platform_device *pdev)
 			if (ret)
 				dev_warn(dev, "mux_control_select failed: %d\n", ret);
 
-			/*
-			 * Switch atcphy to DP-only. should move to a Macbook Pro
-			 * 14-/16-inch specific DP-to-HDMI drm_bridge.
-			 */
-			dcp->typec_mux = fwnode_typec_mux_get(dev_fwnode(dcp->dev));
-			if (!IS_ERR_OR_NULL(dcp->typec_mux)) {
-				struct typec_altmode alt = {
-					.svid = USB_TYPEC_DP_SID,
-				};
-				struct typec_mux_state state = {
-					.alt = &alt,
-					.mode = TYPEC_DP_STATE_C,
-				};
-				int ret = typec_mux_set(dcp->typec_mux, &state);
-				dev_info(dev, "typec_mux_set() returned: %d\n", ret);
-			} else {
-				dev_info(dev, "fwnode_typec_mux_get() returned: %ld\n",
-						IS_ERR(dcp->typec_mux) ? PTR_ERR(dcp->typec_mux) : 0);
-				dcp->typec_mux = NULL;
-			}
 		}
 	}
 

@@ -73,6 +73,32 @@
 	label = "USB-C Left-front";
 };
 
+/* back-left port (typec0) drives the external display on J313 */
+&typec0 {
+	displayport = <&dcpext>;
+};
+
+&typec1 {
+	/delete-property/ displayport;
+};
+
+&dcpext {
+	apple,dptx-phy = <0>;
+	phys = <&atcphy0 PHY_TYPE_DP>;
+	phy-names = "dp-phy";
+	mux-controls = <&atcphy0_xbar 0>;
+	mux-control-names = "dp-xbar";
+};
+
+&dpaudio0 {
+	status = "okay";
+};
+
+&ps_atc0_common {
+	/* Keep ATC PHY power domain alive across suspend/resume with DP alt-mode */
+	apple,always-on;
+};
+
 &spi3 {
 	status = "okay";
 

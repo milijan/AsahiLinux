@@ -14,6 +14,7 @@
 #include <linux/property.h>
 #include <linux/usb/pd_vdo.h>
 #include <linux/usb/typec_dp.h>
+#include <linux/usb/typec_mux.h>
 #include <drm/drm_connector.h>
 #include "displayport.h"
 
@@ -79,6 +80,7 @@ struct dp_altmode {
 	const struct typec_altmode *port;
 	struct fwnode_handle *connector_fwnode;
 	struct typec_altmode *plug_prime;
+	bool firmware_hpd; /* connector HPD is owned by firmware driver */
 };
 
 static int dp_altmode_notify(struct dp_altmode *dp)
@@ -187,9 +189,10 @@ static int dp_altmode_status_update(struct dp_altmode *dp)
 				dp->pending_irq_hpd = true;
 		}
 	} else {
-		drm_connector_oob_hotplug_event(dp->connector_fwnode,
-						hpd ? connector_status_connected :
-						      connector_status_disconnected);
+		if (!dp->firmware_hpd)
+			drm_connector_oob_hotplug_event(dp->connector_fwnode,
+							hpd ? connector_status_connected :
+							      connector_status_disconnected);
 		dp->hpd = hpd;
 		sysfs_notify(&dp->alt->dev.kobj, "displayport", "hpd");
 		if (hpd && irq_hpd) {
@@ -211,8 +214,9 @@ static int dp_altmode_configured(struct dp_altmode *dp)
 	 * configuration is complete to signal HPD.
 	 */
 	if (dp->pending_hpd) {
-		drm_connector_oob_hotplug_event(dp->connector_fwnode,
-						connector_status_connected);
+		if (!dp->firmware_hpd)
+			drm_connector_oob_hotplug_event(dp->connector_fwnode,
+							connector_status_connected);
 		sysfs_notify(&dp->alt->dev.kobj, "displayport", "hpd");
 		dp->pending_hpd = false;
 		if (dp->pending_irq_hpd) {
@@ -396,8 +400,9 @@ static int dp_altmode_vdm(struct typec_altmode *alt,
 			dp->data.status = 0;
 			dp->data.conf = 0;
 			if (dp->hpd) {
-				drm_connector_oob_hotplug_event(dp->connector_fwnode,
-								connector_status_disconnected);
+				if (!dp->firmware_hpd)
+					drm_connector_oob_hotplug_event(dp->connector_fwnode,
+									connector_status_disconnected);
 				dp->hpd = false;
 				sysfs_notify(&dp->alt->dev.kobj, "displayport", "hpd");
 			}
@@ -798,10 +803,12 @@ int dp_altmode_probe(struct typec_altmode *alt)
 	dp->plug_prime = plug;
 
 	fwnode = dev_fwnode(alt->dev.parent->parent); /* typec_port fwnode */
-	if (fwnode_property_present(fwnode, "displayport"))
+	if (fwnode_property_present(fwnode, "displayport")) {
 		dp->connector_fwnode = fwnode_find_reference(fwnode, "displayport", 0);
-	else
+		dp->firmware_hpd = true;
+	} else {
 		dp->connector_fwnode = fwnode_handle_get(fwnode); /* embedded DP */
+	}
 	if (IS_ERR(dp->connector_fwnode))
 		dp->connector_fwnode = NULL;
 
@@ -826,13 +833,40 @@ void dp_altmode_remove(struct typec_altmode *alt)
 	typec_altmode_put_plug(dp->plug_prime);
 
 	if (dp->connector_fwnode) {
-		drm_connector_oob_hotplug_event(dp->connector_fwnode,
-						connector_status_disconnected);
-
+		if (!dp->firmware_hpd)
+			drm_connector_oob_hotplug_event(dp->connector_fwnode,
+							connector_status_disconnected);
 		fwnode_handle_put(dp->connector_fwnode);
 	}
 }
 EXPORT_SYMBOL_GPL(dp_altmode_remove);
+
+/* HPD forwarding for PD controllers whose firmware negotiates DP alt mode */
+void typec_displayport_firmware_hotplug(struct fwnode_handle *fwnode, bool hpd)
+{
+	struct typec_mux *mux;
+
+	if (!fwnode)
+		return;
+
+	mux = fwnode_typec_mux_get(fwnode);
+	if (!IS_ERR_OR_NULL(mux)) {
+		if (hpd) {
+			struct typec_altmode alt = { .svid = USB_TYPEC_DP_SID };
+			struct typec_mux_state state = { .alt = &alt, .mode = TYPEC_DP_STATE_C };
+			typec_mux_set(mux, &state);
+		} else {
+			struct typec_mux_state state = { .mode = TYPEC_STATE_USB };
+			typec_mux_set(mux, &state);
+		}
+		typec_mux_put(mux);
+	}
+
+	drm_connector_oob_hotplug_event(fwnode,
+					hpd ? connector_status_connected :
+					      connector_status_disconnected);
+}
+EXPORT_SYMBOL_GPL(typec_displayport_firmware_hotplug);
 
 static const struct typec_device_id dp_typec_id[] = {
 	{ USB_TYPEC_DP_SID },

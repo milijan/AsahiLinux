@@ -128,4 +128,7 @@ enum {
 #define   DP_CONF_CABLE_TYPE_OPTICAL	3
 #define DP_CONF_DPAM_VERSION		BIT(30)
 
+struct fwnode_handle;
+void typec_displayport_firmware_hotplug(struct fwnode_handle *fwnode, bool hpd);
+
 #endif /* __USB_TYPEC_DP_H */
